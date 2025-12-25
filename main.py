@@ -165,7 +165,7 @@ def process_inventory_data(shipped_df, inventory_df, pm_df):
             totals[col] = int(inventory[col].sum())
         else:
             totals[col] = ""
-
+    totals["sku"] = "Grand Total"
     inventory = pd.concat([inventory, pd.DataFrame([totals])], ignore_index=True)
 
     # Final column order
@@ -261,3 +261,4 @@ if "result_df" in st.session_state:
 
 st.markdown("---")
 st.markdown("<p style='text-align:center;color:#94a3b8'>Built with Streamlit 🎈</p>", unsafe_allow_html=True)
+
