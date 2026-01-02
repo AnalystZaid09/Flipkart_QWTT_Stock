@@ -176,6 +176,9 @@ def process_inventory_data(shipped_df, inventory_df, pm_df):
     ]
 
     final_df = inventory[[c for c in final_cols if c in inventory.columns]].copy()
+    
+    # Add new column: CP As Per Qty = CP * Sales QTY
+    final_df["CP As Per Qty"] = final_df["CP"] * final_df["Sales QTY"]
 
     return final_df
 
@@ -261,4 +264,3 @@ if "result_df" in st.session_state:
 
 st.markdown("---")
 st.markdown("<p style='text-align:center;color:#94a3b8'>Built with Streamlit 🎈</p>", unsafe_allow_html=True)
-
