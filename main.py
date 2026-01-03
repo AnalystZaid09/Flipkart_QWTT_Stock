@@ -1,266 +1,262 @@
+# cl.py
 import streamlit as st
 import pandas as pd
-import numpy as np
 from io import BytesIO
 
-# --------------------------------------------------
-# Page config
-# --------------------------------------------------
-st.set_page_config(
-    page_title="Flipkart QWTT Stock Analysis Tool",
-    page_icon="📊",
-    layout="wide"
-)
+st.set_page_config(page_title="Flipkart Reports", layout="wide")
 
-# --------------------------------------------------
-# Custom CSS
-# --------------------------------------------------
-st.markdown("""
-<style>
-.metric-box {
-    background: #0f172a;
-    padding: 20px;
-    border-radius: 12px;
-    color: white;
-}
-.metric-title {
-    font-size: 14px;
-    color: #cbd5f5;
-}
-.metric-value {
-    font-size: 36px;
-    font-weight: bold;
-}
-.metric-desc {
-    font-size: 12px;
-    color: #94a3b8;
-}
-</style>
-""", unsafe_allow_html=True)
+st.title("📊 Flipkart Sales & Inventory Report")
 
-st.markdown("<h1 style='text-align:center'>📊 Flipkart QWTT Stock Analysis Tool</h1>", unsafe_allow_html=True)
-st.markdown(
-    "<p style='text-align:center;color:#94a3b8'>Upload files to generate inventory insights</p>",
-    unsafe_allow_html=True
-)
+# File uploaders in sidebar
+st.sidebar.header("Upload Files")
+sales_file = st.sidebar.file_uploader("Upload Shipped Orders CSV", type=['csv'])
+pm_file = st.sidebar.file_uploader("Upload PM Excel (Flipkart)", type=['xlsx'])
+inventory_file = st.sidebar.file_uploader("Upload Inventory Report CSV", type=['csv'])
 
-# --------------------------------------------------
-# File uploads
-# --------------------------------------------------
-st.markdown("---")
-c1, c2, c3 = st.columns(3)
+# Generate button
+generate_button = st.sidebar.button("🚀 Generate Reports", type="primary", use_container_width=True)
 
-with c1:
-    shipped_file = st.file_uploader("📦 Shipped Orders (CSV)", type=["csv"])
-
-with c2:
-    inventory_file = st.file_uploader("📋 Inventory Report (CSV)", type=["csv"])
-
-with c3:
-    pm_file = st.file_uploader("💰 Purchase Master (Excel)", type=["xlsx", "xls"])
-
-st.markdown("---")
-
-
-# --------------------------------------------------
-# Helper: remove blank rows
-# --------------------------------------------------
-def remove_blank_rows(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    data_rows = df.iloc[:-1].replace(r"^\s*$", np.nan, regex=True)
-    data_rows = data_rows.dropna(how="any")
-    return pd.concat([data_rows, df.iloc[-1:]], ignore_index=True)
-
-
-# --------------------------------------------------
-# Core processing function
-# --------------------------------------------------
-def process_inventory_data(shipped_df, inventory_df, pm_df):
-
-    # Filter Flipkart orders
-    shipped_df = shipped_df[shipped_df["Marketplace"] == "Flipkart"]
-
-    # Sales aggregation
-    sales = (
-        shipped_df.groupby("SKU", as_index=False)["Quantity"]
-        .sum()
-        .rename(columns={"Quantity": "Sales QTY"})
-    )
-
-    # Inventory aggregation
-    inventory_df["sku"] = inventory_df["sku"].astype(str).str.replace("`", "", regex=False)
-    inventory = (
-        inventory_df.groupby("sku", as_index=False)["old_quantity"]
-        .sum()
-        .rename(columns={"old_quantity": "Inventory QTY"})
-    )
-
-    # Merge sales
-    inventory["Sales QTY"] = (
-        inventory["sku"]
-        .map(sales.set_index("SKU")["Sales QTY"])
-        .fillna(0)
-        .astype(int)
-    )
-
-    # --------------------------------------------------
-    # Purchase Master column detection
-    # --------------------------------------------------
-    pm_sku = next((c for c in pm_df.columns if "easycomsku" in c.lower()), None)
-    pm_manager = next((c for c in pm_df.columns if "brand manager" in c.lower()), None)
-    pm_brand = next((c for c in pm_df.columns if c.lower() == "brand"), None)
-    pm_product = next((c for c in pm_df.columns if "product" in c.lower()), None)
-    pm_fns = next((c for c in pm_df.columns if "fns" in c.lower()), None)
-    pm_vendor = next((c for c in pm_df.columns if "vendor" in c.lower()), None)
-    pm_cp = next((c for c in pm_df.columns if c.lower() in ["cp", "cost", "cost price"]), None)
-
-    # --------------------------------------------------
-    # 🔒 CRITICAL FIX: DEDUPLICATE PM BEFORE MAPPING
-    # --------------------------------------------------
-    if pm_sku:
-        pm_df[pm_sku] = pm_df[pm_sku].astype(str).str.strip()
-
-        pm_df_unique = (
-            pm_df
-            .dropna(subset=[pm_sku])
-            .drop_duplicates(subset=[pm_sku], keep="first")
-        )
-
-        pm_map = pm_df_unique.set_index(pm_sku)
-
-        sku_series = inventory["sku"].astype(str).str.strip()
-
-        if pm_manager:
-            inventory["Manager"] = sku_series.map(pm_map[pm_manager])
-
-        if pm_brand:
-            inventory["Brand"] = sku_series.map(pm_map[pm_brand])
-
-        if pm_product:
-            inventory["Product Name"] = sku_series.map(pm_map[pm_product])
-
-        if pm_fns:
-            inventory["FNS"] = sku_series.map(pm_map[pm_fns])
-
-        if pm_vendor:
-            inventory["Vendor SKU"] = sku_series.map(pm_map[pm_vendor])
-
-        if pm_cp:
-            inventory["CP"] = pd.to_numeric(
-                sku_series.map(pm_map[pm_cp]),
-                errors="coerce"
-            ).fillna(0)
-
-    # Sort
-    inventory = inventory.sort_values("Sales QTY")
-
-    # --------------------------------------------------
-    # Grand Total row
-    # --------------------------------------------------
-    totals = {}
-    for col in inventory.columns:
-        if pd.api.types.is_numeric_dtype(inventory[col]):
-            totals[col] = int(inventory[col].sum())
-        else:
-            totals[col] = ""
-    totals["sku"] = "Grand Total"
-    inventory = pd.concat([inventory, pd.DataFrame([totals])], ignore_index=True)
-
-    # Final column order
-    final_cols = [
-        "sku", "Manager", "Brand", "Product Name",
-        "FNS", "Vendor SKU", "Inventory QTY",
-        "Sales QTY", "CP"
-    ]
-
-    final_df = inventory[[c for c in final_cols if c in inventory.columns]].copy()
+def add_grand_total(df):
+    """Add grand total row to dataframe"""
+    df_copy = df.copy()
     
-    # Add new column: CP As Per Qty = CP * Sales QTY
-    final_df["CP As Per Qty"] = final_df["CP"] * final_df["Sales QTY"]
+    # Create grand total row
+    total_row = {}
+    for col in df_copy.columns:
+        if df_copy[col].dtype in ['int64', 'float64']:
+            total_value = df_copy[col].sum()
+            # Round CP and As Per Qty CP columns to 2 decimal places
+            if col in ['CP', 'As Per Qty CP']:
+                total_row[col] = round(total_value, 2)
+            else:
+                total_row[col] = total_value
+        else:
+            total_row[col] = 'GRAND TOTAL' if col == df_copy.columns[0] else ''
+    
+    # Add total row
+    total_df = pd.DataFrame([total_row])
+    df_with_total = pd.concat([df_copy, total_df], ignore_index=True)
+    
+    return df_with_total
 
-    return final_df
+def to_excel(df, sheet_name):
+    """Convert dataframe to Excel bytes"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return output.getvalue()
 
+def process_flipkart_data(sales_df, pm_df, inventory_df):
+    """Process Flipkart data and return sales and inventory reports"""
+    
+    # Process Sales Report
+    # Filter only Flipkart marketplace
+    sales_df = sales_df[sales_df["Marketplace"].str.strip().str.lower() == "flipkart"]
+    
+    # Pivot: SKU wise sales quantity
+    sales_pivot = (
+        sales_df
+        .groupby("SKU", as_index=False)["Quantity"]
+        .sum()
+        .rename(columns={"Quantity": "Sales Qty"})
+    )
+    
+    # Create lookup dictionaries from PM file
+    fsn_map = pm_df.set_index("EasycomSKU")["FNS"].to_dict()
+    vendor_sku_map = pm_df.set_index("EasycomSKU")["Vendor SKU Codes"].to_dict()
+    brand_map = pm_df.set_index("EasycomSKU")["Brand"].to_dict()
+    manager_map = pm_df.set_index("EasycomSKU")["Brand Manager"].to_dict()
+    product_map = pm_df.set_index("EasycomSKU")["Product Name"].to_dict()
+    cp_map = pm_df.set_index("EasycomSKU")["CP"].to_dict()
+    
+    # Map data to sales pivot
+    sales_pivot["FNS"] = sales_pivot["SKU"].map(fsn_map)
+    sales_pivot["Vendor SKU Codes"] = sales_pivot["SKU"].map(vendor_sku_map)
+    sales_pivot["Brand"] = sales_pivot["SKU"].map(brand_map)
+    sales_pivot["Brand Manager"] = sales_pivot["SKU"].map(manager_map)
+    sales_pivot["Product Name"] = sales_pivot["SKU"].map(product_map)
+    sales_pivot["CP"] = pd.to_numeric(sales_pivot["SKU"].map(cp_map), errors='coerce').round(2)
+    
+    # Process Inventory Report
+    # Clean SKU column - remove backticks and trim
+    inventory_df["sku"] = (
+        inventory_df["sku"]
+        .astype(str)
+        .str.replace("`", "", regex=False)
+        .str.strip()
+    )
+    
+    # Pivot: SKU wise total stock
+    inventory_pivot = (
+        inventory_df
+        .groupby("sku", as_index=False)["old_quantity"]
+        .sum()
+        .rename(columns={"old_quantity": "Stock"})
+    )
+    
+    # Add stock to sales report
+    stock_map = inventory_pivot.set_index("sku")["Stock"].to_dict()
+    sales_pivot["Stock"] = sales_pivot["SKU"].map(stock_map)
+    
+    # Calculate As Per Qty CP for sales report
+    sales_pivot["As Per Qty CP"] = (sales_pivot["CP"] * sales_pivot["Sales Qty"]).round(2)
+    
+    # Reorder columns for sales report
+    sales_report = sales_pivot[[
+        "SKU", "FNS", "Vendor SKU Codes", "Brand", "Brand Manager",
+        "Product Name", "Sales Qty", "CP", "Stock", "As Per Qty CP"
+    ]]
+    
+    # Process Inventory Report
+    inventory_report = inventory_pivot.copy()
+    
+    # Map data to inventory report
+    inventory_report["FNS"] = inventory_report["sku"].map(fsn_map)
+    inventory_report["Vendor SKU Codes"] = inventory_report["sku"].map(vendor_sku_map)
+    inventory_report["Brand"] = inventory_report["sku"].map(brand_map)
+    inventory_report["Brand Manager"] = inventory_report["sku"].map(manager_map)
+    inventory_report["Product Name"] = inventory_report["sku"].map(product_map)
+    inventory_report["CP"] = pd.to_numeric(inventory_report["sku"].map(cp_map), errors='coerce').round(2)
+    
+    # Add sales qty to inventory report
+    sale_qty_inv_map = sales_pivot.set_index("SKU")["Sales Qty"].to_dict()
+    inventory_report["Sales Qty"] = inventory_report["sku"].map(sale_qty_inv_map)
+    
+    # Calculate As Per Qty CP for inventory report
+    inventory_report["As Per Qty CP"] = (inventory_report["CP"] * inventory_report["Sales Qty"]).round(2)
+    
+    # Reorder columns for inventory report
+    inventory_report = inventory_report[[
+        "sku", "FNS", "Vendor SKU Codes", "Brand", "Brand Manager",
+        "Product Name", "Stock", "Sales Qty", "CP", "As Per Qty CP"
+    ]]
+    
+    return sales_report, inventory_report
 
-# --------------------------------------------------
-# Generate report
-# --------------------------------------------------
-if st.button("🚀 Generate Report", use_container_width=True):
-    if shipped_file and inventory_file and pm_file:
-        with st.spinner("Processing data..."):
-            result_df = process_inventory_data(
-                pd.read_csv(shipped_file),
-                pd.read_csv(inventory_file),
-                pd.read_excel(pm_file)
+# Main app logic
+if sales_file and pm_file and inventory_file and generate_button:
+    try:
+        with st.spinner("Processing files..."):
+            # Read files
+            sales_df = pd.read_csv(sales_file)
+            pm_df = pd.read_excel(pm_file)
+            inventory_df = pd.read_csv(inventory_file)
+        
+        # Process data
+        with st.spinner("Generating reports..."):
+            sales_report, inventory_report = process_flipkart_data(sales_df, pm_df, inventory_df)
+        
+        st.success("✅ Reports generated successfully!")
+        
+        # Create tabs
+        tab1, tab2 = st.tabs(["💰 Flipkart Sales Report", "📦 Flipkart Inventory Report"])
+        
+        with tab1:
+            st.subheader("Flipkart Sales Report")
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Products Sold", len(sales_report))
+            with col2:
+                st.metric("Total Units Sold", int(sales_report["Sales Qty"].sum()))
+            with col3:
+                st.metric("Total Sales Value", f"₹{sales_report['As Per Qty CP'].sum():,.2f}")
+            with col4:
+                avg_cp = sales_report['As Per Qty CP'].sum() / sales_report['Sales Qty'].sum()
+                st.metric("Avg CP per Unit", f"₹{avg_cp:,.2f}")
+            
+            st.divider()
+            
+            # Add grand total to display
+            sales_report_with_total = add_grand_total(sales_report)
+            
+            # Display dataframe
+            st.dataframe(sales_report_with_total, use_container_width=True, height=500)
+            
+            # Download button (with grand total)
+            excel_data = to_excel(sales_report_with_total, "Sales Report")
+            st.download_button(
+                label="📥 Download Sales Report (Excel)",
+                data=excel_data,
+                file_name="Flipkart_Sales_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            st.session_state["result_df"] = result_df
-        st.success("✅ Report generated successfully")
-    else:
-        st.warning("⚠️ Please upload all files")
+        
+        with tab2:
+            st.subheader("Flipkart Inventory Report")
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total SKUs", len(inventory_report))
+            with col2:
+                st.metric("Total Stock", int(inventory_report["Stock"].sum()))
+            with col3:
+                sales_qty_total = inventory_report["Sales Qty"].sum()
+                st.metric("Total Sales Qty", int(sales_qty_total) if pd.notna(sales_qty_total) else 0)
+            with col4:
+                cp_total = inventory_report['As Per Qty CP'].sum()
+                st.metric("Total CP Value", f"₹{cp_total:,.2f}" if pd.notna(cp_total) else "₹0.00")
+            
+            st.divider()
+            
+            # Add grand total to display
+            inventory_report_with_total = add_grand_total(inventory_report)
+            
+            # Display dataframe
+            st.dataframe(inventory_report_with_total, use_container_width=True, height=500)
+            
+            # Download button (with grand total)
+            excel_data = to_excel(inventory_report_with_total, "Inventory Report")
+            st.download_button(
+                label="📥 Download Inventory Report (Excel)",
+                data=excel_data,
+                file_name="Flipkart_Inventory_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+    except Exception as e:
+        st.error(f"❌ Error processing files: {str(e)}")
+        st.info("Please ensure all files are uploaded in the correct format.")
+elif sales_file and pm_file and inventory_file and not generate_button:
+    st.info("✅ All files uploaded! Click the '🚀 Generate Reports' button in the sidebar to process.")
+else:
+    st.info("👈 Please upload all three required files in the sidebar to begin:")
+    st.markdown("""
+    1. **Shipped Orders CSV** - Flipkart shipped orders file
+    2. **PM Excel** - Product master file (Flipkart)
+    3. **Inventory Report CSV** - Flipkart inventory report
+    """)
+    
+    # Show sample format expectations
+    with st.expander("ℹ️ File Format Requirements"):
+        st.markdown("""
+        **Shipped Orders CSV should contain:**
+        - Company
+        - Marketplace (must contain "Flipkart")
+        - Order Number
+        - SKU
+        - Quantity
+        - Brand
+        - Product Name
+        
+        **PM Excel should contain:**
+        - FNS
+        - EasycomSKU
+        - Vendor SKU Codes
+        - Brand
+        - Brand Manager
+        - Product Name
+        - CP
+        
+        **Inventory Report CSV should contain:**
+        - sku (may have backticks)
+        - old_quantity (will be summed as Stock)
+        - Brand
+        - Product Name
+        """)
 
-
-# --------------------------------------------------
-# Display Results
-# --------------------------------------------------
-if "result_df" in st.session_state:
-    df = st.session_state["result_df"]
-    data_rows = df.iloc[:-1]
-    totals = df.iloc[-1]
-
-    st.markdown("## 📈 Analysis Results")
-
-    a, b, c = st.columns(3)
-
-    with a:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Total SKUs</div>
-            <div class="metric-value">{len(data_rows)}</div>
-            <div class="metric-desc">Unique products in report</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with b:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Total Inventory</div>
-            <div class="metric-value">{int(totals["Inventory QTY"]):,}</div>
-            <div class="metric-desc">Current stock available</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with c:
-        st.markdown(f"""
-        <div class="metric-box">
-            <div class="metric-title">Total Sales</div>
-            <div class="metric-value">{int(totals["Sales QTY"]):,}</div>
-            <div class="metric-desc">Units sold on Flipkart</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # --------------------------------------------------
-    # Tabs
-    # --------------------------------------------------
-    st.markdown("---")
-    tab1, tab2 = st.tabs(["📊 Detailed Report", "🧹 Cleaned Report"])
-
-    with tab1:
-        st.dataframe(df, use_container_width=True, height=420)
-
-        buf1 = BytesIO()
-        with pd.ExcelWriter(buf1, engine="openpyxl") as w:
-            df.to_excel(w, index=False)
-        st.download_button("⬇️ Download Detailed Report", buf1.getvalue(), "detailed_report.xlsx")
-
-    with tab2:
-        cleaned = remove_blank_rows(df)
-        st.dataframe(cleaned, use_container_width=True, height=420)
-
-        buf2 = BytesIO()
-        with pd.ExcelWriter(buf2, engine="openpyxl") as w:
-            cleaned.to_excel(w, index=False)
-        st.download_button("⬇️ Download Cleaned Report", buf2.getvalue(), "cleaned_report.xlsx")
-
-st.markdown("---")
-st.markdown("<p style='text-align:center;color:#94a3b8'>Built with Streamlit 🎈</p>", unsafe_allow_html=True)
+# Footer
+st.divider()
+st.caption("Flipkart Sales & Inventory Report Generator | Built with Streamlit")
