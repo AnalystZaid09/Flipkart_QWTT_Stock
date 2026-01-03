@@ -3,9 +3,9 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="Flipkart Reports", layout="wide")
+st.set_page_config(page_title="Flipkart QWTT Reports", layout="wide")
 
-st.title("📊 Flipkart Sales & Inventory Report")
+st.title("📊 Flipkart QWTT Sales & Inventory Report")
 
 # File uploaders in sidebar
 st.sidebar.header("Upload Files")
@@ -260,3 +260,4 @@ else:
 # Footer
 st.divider()
 st.caption("Flipkart Sales & Inventory Report Generator | Built with Streamlit")
+
